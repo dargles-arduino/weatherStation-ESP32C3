@@ -36,11 +36,12 @@
 
 // Set trace to be false if you don't want diagnostic output. You can't have
 // both Serial o/p and OLED connectivity at the same time. Choose EITHER:
-#define serialTrace true  // requires Xiao_ESP32C3 board def
-#define oledTrace   false // requires ESP32C3 Dev Module board def
+#define serialTrace false  // requires Xiao_ESP32C3 board def
+#define oledTrace   true   // requires ESP32C3 Dev Module board def
 
 /* Necessary includes */
 #include "flashscreen.h"
+#include "OLEDscreen.h"
 // #include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
 /* These includes are for the BME280 sensor */
 // #include <Wire.h>
@@ -77,6 +78,7 @@
 /* Global stuff that must happen outside setup() */
 RTC_DATA_ATTR int readingNo = 0;            // RTC data survives deep sleep; readingNo numbers the readings
 RTC_DATA_ATTR int error     = 0;            // error is the error# this run, available at startup after deep sleep
+OLEDscreen        screen;                   // Creates the screen (OLED) object
 //BMx280I2C         bmx280(SENSOR_ADDRESS);  // Creates a BMx280I2C object using I2C
 //AHT20             aht20;                // Creates AHT20 sensor object
 //ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
@@ -89,6 +91,7 @@ String configValues[]   = {"test", "mx5", "test", "test", "in1", "in2", "bat", "
 void setup() {
   // initialise objects
   flashscreen flash;
+  screen.begin();
   
   // declare variables
   long int  baudrate  = 115200;     // Baudrate for serial output
@@ -115,45 +118,52 @@ void setup() {
   if(serialTrace) Serial.begin(baudrate);
   // Serial.setDebugOutput(true);
 
-  // Send program details to serial output
+  // Send program details to output device
   if(serialTrace) flash.message(PROG, VER, BUILD);
+  if(oledTrace) screen.banner(PROG, VER, BUILD);
   
   // Set up the ESP deep sleep time
   esp_sleep_enable_timer_wakeup(deepSleepTime);
-  if(serialTrace) Serial.printf("Deep sleep time set to %i minutes\n", deepSleepTime/60e6);
+  String message = "Deep sleep time set  to " + String(deepSleepTime/60e6) + " minutes\n";
+  if(serialTrace) Serial.print(message);
+  if(oledTrace) screen.print(message);
 
   // Set up the reading no for this set of readings
   readingNo++;
-  if(serialTrace)
-  {
-    Serial.print("Starting run ");
-    Serial.println(readingNo);
+  message = "Starting run " + String(readingNo) + "\n";
+  if(serialTrace) Serial.print(message);
+  if(oledTrace){
+    delay(2000);
+    screen.clear();
+    screen.print(message);
   }
-
   // Remember the error no for the previous run and reset for this run
   prevError = error;
   error = 0;
 
   // Check the ADC to see what the battery voltage is
   if(serialTrace) Serial.println("Checking battery...");
+  if(oledTrace) screen.print("Checking battery...\n");
   batteryOK = false;
   adc = analogRead(ADC_0);
-  if(serialTrace)
-  {
-    Serial.print("ADC reading: ");
-    Serial.println(adc);  
-  }
+  message = "ADC reading: " + String(adc) + "\n";
+  if(serialTrace) Serial.print(message);
+  if(oledTrace) screen.print(message);
   if(adc<CUTOFF) error += ERROR_LOWBAT;
   else batteryOK = true;
   if(batteryOK){
     if(serialTrace) Serial.println("Battery OK");
+    if(oledTrace) screen.print("Battery OK\n");
     // Determine which channel we're using
     channel = readChannel();
-    if(serialTrace) Serial.printf("Channel read as: %s\n", channel);
+    message = "Channel read as: " + String(channel) + "\n";
+    if(serialTrace) Serial.print(message);
+    if(oledTrace) screen.print(message);
 
     // Get the sensor(s) going
     if(serialTrace) Serial.println("Initialising sensor...");
-    
+    if(oledTrace) screen.print("Initialising sensor\n");
+
     /* Now initialise the BME280 */
     //Wire.begin();
     /* begin() checks the Interface, reads the sensor ID (to differentiate between 
@@ -314,8 +324,10 @@ void setup() {
   if(serialTrace)
   {
     Serial.println("Going to sleep...");
-    Serial.flush();
-  } 
+    //Serial.flush();
+  }
+ if(oledTrace) screen.print("zzz...");
+
   // Whether successful or not, we're going to sleep for an hour before trying again!
   esp_deep_sleep_start();
 }
