@@ -1,14 +1,14 @@
 /**
  * Program: weatherStation-ESP32C3
  * Purpose:
- *   This code sets up a weather station. It wakes from deep sleep (to save power), then checks 
+ *   This code sets up a weather station. It uses deep sleep to save power. On waking, it checks 
  *   the battery, takes readings from a BME280 or BMP280+AHT20, connects to the local wireless, 
  *   and submits the results to a webserver presumed to be waiting for a connection. It then 
  *   goes back to sleep for an hour. Some notes on this version:
  *   - There's some legacy code that I'm loathe to delete. This includes code to put the chip 
  *     back to sleep immediately after wake-up if the battery voltage is too low. This isn't 
  *     used any more, relying instead on a hardware battery protection circuit.
- *   - Theres a sound channel on D1, not currently used.
+ *   - Theres a sound channel on GPIO5, not currently used.
  *   - This version (weatherStation-ESP32C3) is designed to work especially with that chip. It 
  *     has a very low deep sleep current by design (43uA claimed), which is significantly less 
  *     that the ESP8266 versions on the market, and a match for home-made 8266 versions based 
@@ -32,26 +32,28 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "21oct2023 @ 23:04h"
+#define BUILD   "22oct2023 @ 17:32h"
 
 // Checked this far...
 
 /* Necessary includes */
 #include "flashscreen.h"
-#include "rtcMemory.h"
-#include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
+// #include "rtcMemory.h"
+// #include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
 /* These includes are for the BME280 sensor */
-#include <Wire.h>
-#include <BMx280I2C.h>
-#include <AHT20.h>
+// #include <Wire.h>
+// #include <BMx280I2C.h>
+// #include <AHT20.h>
 /* These are for the WiFi & webclient */
-#include <ESP8266WiFi.h>
-#include <ESP8266WiFiMulti.h>
-#include <ESP8266HTTPClient.h>
+// #include <ESP8266WiFi.h>
+// #include <ESP8266WiFiMulti.h>
+// #include <ESP8266HTTPClient.h>
 
 /* Global "defines" - some may have to look like variables because of type */
-#define ADC_0       A0
-#define SOUND_OUT   D3
+#define ADC_0                 0     // Monitors battery health
+#define ADC_1                 1     // Plan is for this to monitor light levels
+#define SOUND_OUT             3     // Not currently used
+#define LED                   5
 #define CUTOFF      0 //300    // 369 // 6V0 = 738, so target 4V -> 492. For 18650, we want 3V -> 369
 #define I2C_ADDRESS           0x76   // Defines the expected I2C address (0x76) for the BMx280...
 #define ALT_I2C_ADDRESS       0x77   // - but is 0x77 on combined AHT20/BMP280
@@ -64,15 +66,15 @@
 /* ----- Initialisation ------------------------------------------------- */
 
 /* Global stuff that must happen outside setup() */
-rtcMemory         store;                // Creates an RTC memory object
-BMx280I2C         bmx280(I2C_ADDRESS);  // Creates a BMx280I2C object using I2C
-AHT20             aht20;                // Creates AHT20 sensor object
-ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
-int error         = 0;                  // Reports any errors that occur during run
-int pin           = LED_BUILTIN;        // Allows us to use alternative pins to LED_BUILTIN
-int config_pin1   = D5; // =msb; 0 = car, 1 = weather
-int config_pin2   = D6; //       0 = in,  1 = out
-int config_pin3   = D7; // =lsb; 0 = 1,   1 = 2
+//rtcMemory         store;                // Creates an RTC memory object
+//BMx280I2C         bmx280(I2C_ADDRESS);  // Creates a BMx280I2C object using I2C
+//AHT20             aht20;                // Creates AHT20 sensor object
+//ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
+int error         =  0;                 // Reports any errors that occur during run
+int pin           =  5;                 // Allows us to use alternative pins to LED_BUILTIN
+int config_pin1   = 21;                 // =msb; 0 = car, 1 = weather
+int config_pin2   = 20;                 //       0 = in,  1 = out
+int config_pin3   = 10;                 // =lsb; 0 = 1,   1 = 2
 int pin1;
 int pin2;
 int pin3;
@@ -90,15 +92,16 @@ void setup() {
   boolean   batteryOK = false;      // Checks whether our battery has sufficient charge
   uint64_t  deepSleepTime = 3600e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m
   bool      BMElive = false;        // records whether BME280 initialised properly
-  int       adc  = 0;
-  float     temp = 0;
-  float     pres = 0;
-  float     hum  = 0;
+  int       adc  = 0;               // records battery voltage
+  int       light = 0;              // records light level
+  float     temp = 0;               // records: temperature...
+  float     pres = 0;               // ...pressure...
+  float     hum  = 0;               // ...and humidity
   String    readings = "";          // For the parameter string in the http upload
   boolean   successful = false;     // If we fail, let's record the value and try next time
   String    urlRequest;             // String for contacting server
-  pinMode(pin, OUTPUT);             // Only use pin (LED) in case of error; but initialise it now
-  digitalWrite(pin, LOW);           // Turn off pin; it seems to come on by default
+  pinMode(LED, OUTPUT);             // Only use pin (LED) in case of error; but initialise it now
+  digitalWrite(LED, LOW);           // Turn off pin; it seems to come on by default
   pinMode(SOUND_OUT, OUTPUT);
   pinMode(config_pin1, INPUT_PULLUP); // {set up the configure pins to be input_pullup,
   pinMode(config_pin2, INPUT_PULLUP); // {this will make them inverse logic
@@ -112,12 +115,12 @@ void setup() {
   flash.message(PROG, VER, BUILD);
   
   // Initialise the RTC memory
-  store.readData();
+  //store.readData();
   // Remember the serial no for this set of readings
-  serialNo = store.count() + 1;
-  store.incrementCount();
+  //serialNo = store.count() + 1;
+  //store.incrementCount();
   Serial.print("Starting run ");
-  Serial.println(serialNo);
+  //Serial.println(serialNo);
 
   // Check the ADC to see what the battery voltage is
   Serial.println("Checking battery...");
@@ -131,18 +134,18 @@ void setup() {
     Serial.println("Battery OK");
 
     // Determine which channel we're using
-    channel = readChannel();
-    Serial.printf("Channel read as: %s\n", channel);
+    //channel = readChannel();
+    //Serial.printf("Channel read as: %s\n", channel);
 
     // Get the BME sensor going
     // Initialise the BME sensor
     Serial.println("Initialising sensor...");
     
     /* Now initialise the BME280 */
-    Wire.begin();
+    //Wire.begin();
     /* begin() checks the Interface, reads the sensor ID (to differentiate between 
      BMP280 and BME280) and reads compensation parameters.*/\
-    int attempts = 5;
+    /*int attempts = 5;
     while(!bmx280.begin() && (attempts>0))
     {
       Serial.print("Attempt ");
@@ -174,10 +177,10 @@ void setup() {
       bmx280.writeOversamplingTemperature(BMx280MI::OSRS_T_x16);
       //if sensor is a BME280, set an oversampling setting for humidity measurements.
       if (bmx280.isBME280()) bmx280.writeOversamplingHumidity(BMx280MI::OSRS_H_x16);
-    }
+    }*/
 
     // If we're up and running get the sensor readings (ADC has already been recorded)
-    if(BMElive)
+    /*if(BMElive)
     {
       //start a measurement
       if (!bmx280.measure()){
@@ -195,34 +198,34 @@ void setup() {
           if(bmx280.isBME280()) hum = bmx280.getHumidity();
         }
       }
-    }
+    }*/
 
     /* See if we have an AHT20 */
     // We've already got Wire going => Wire.begin(); //Join I2C bus
     //Check if the AHT20 will acknowledge
-    if (aht20.begin() == false) Serial.println("AHT20 not detected.");
+    /*if (aht20.begin() == false) Serial.println("AHT20 not detected.");
     else
     {
       Serial.println("AHT20 detected.");
       temp = aht20.getTemperature();
       hum = aht20.getHumidity();
-    }
+    }*/
 
-    // Start the sound on D1
+    // Start the sound
     //analogWrite(SOUND_OUT, TONE);
 
     // Set up the parameter string for the web exchange
-    int prevError = store.error();
+    /*int prevError = store.error();
     Serial.print("Previous error # was: ");
     Serial.println(prevError);
     readings = "?"+String(channel)+"="+String(adc)+"&serialNo="+String(serialNo)+"&temp="+String(temp)+"&pres="+String(pres)+"&hum="+String(hum)+"&error="+String(store.error());
     Serial.print("Param String is: ");
     Serial.println(readings);
     Serial.print("Current error is: ");
-    Serial.println(error);
+    Serial.println(error);*/
 
     // Register WiFi extender
-    WiFiMulti.addAP(SSID_2, PWD_2);
+    /*WiFiMulti.addAP(SSID_2, PWD_2);
     // Now start up the wifi and attempt to submit the data
     wifiConnect();
     //Serial.print("Connecting to WiFi");
@@ -276,12 +279,12 @@ void setup() {
         Serial.printf("Request failed, error: %s\n", http.errorToString(httpCode).c_str());
       }
       http.end();
-    }
+    }*/
     // If no WiFi...
     //else trace("WiFi failed, code: ", String(WiFiMulti.run()));
   }
 
-  if(error!=0){
+  /*if(error!=0){
     Serial.print("Error #");
     Serial.print(error);
     Serial.println(" occured");
@@ -297,24 +300,24 @@ void setup() {
   analogWrite(SOUND_OUT, 0);
   Serial.println("Going to sleep...");
   // Whether successful or not, we're going to sleep for an hour before trying again!
-  ESP.deepSleep(deepSleepTime);  
+  ESP.deepSleep(deepSleepTime);  */
 }
 
 void blink(int code){
   for (int count=0;count<code;count++){
-    digitalWrite(pin, !digitalRead(pin));
+    digitalWrite(LED, !digitalRead(LED));
     delay(500);
   }
 }
-
+/*
 void wifiConnect()
 {
   Serial.println("Connecting to Wifi...");
   WiFi.mode(WIFI_STA);
-  WiFiMulti.addAP(LOCAL_SSID, LOCAL_PWD);
+  WiFiMulti.addAP(LOCAL_SSID, LOCAL_PWD);*/
   /* NOTE: the example sketch has this wrong. We need to wait -after- doing
            the WiFiMulti.addAP to give it time to register! */
-  Serial.print("[SETUP]\nWAIT ");
+/*  Serial.print("[SETUP]\nWAIT ");
   for (uint8_t t = 4; t > 0; t--) {
     Serial.printf("%d...", t);
     Serial.flush();
@@ -342,7 +345,7 @@ void wifiConnect()
   }
   return;
 }
-
+*/
 /*boolean checkBattery(){
   adc = analogRead(ADC_0);
   if(adc<=CUTOFF) store.setError(1);
@@ -351,7 +354,7 @@ void wifiConnect()
 
 void loop() {
   // If we get here, something's gone wrong! Let's flash a warning
-  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  digitalWrite(LED, !digitalRead(LED));
   delay(1000);
 }
 
