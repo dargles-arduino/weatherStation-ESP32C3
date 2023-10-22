@@ -1,8 +1,8 @@
 /* WiFi info */
-#define LOCAL_SSID  "SKYFFPZE"
-#define LOCAL_PWD   "f9MeYI8aV7rj"
-#define SSID_2      "SKYFFPZEextender"
-#define PWD_2       "f9MeYI8aV7rj"
+#define LOCAL_SSID  "MySSID"
+#define LOCAL_PWD   "12345678"
+#define SSID_2      "MySSIDextender"
+#define PWD_2       "12345678"
 #define URL_W       "http://argles.org.uk/homelog.php" // "Website" URL <my primary url>
 #define URL_D       "http://192.168.0.31/homelog.php"  // "Display" URL <my secondary url>
 // Note: CHANNEL is no longer used, the channel is set via hardware links instead
