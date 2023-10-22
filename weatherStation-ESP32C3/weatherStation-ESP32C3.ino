@@ -6,8 +6,8 @@
  *   and submits the results to a webserver presumed to be waiting for a connection. It then 
  *   goes back to sleep for an hour. Some notes on this version:
  *   - There's some legacy code that I'm loathe to delete. This includes code to put the chip 
- *     back to sleep immediately after wake-up if the battery voltage is too low. This isn't 
- *     used any more, relying instead on a hardware battery protection circuit.
+ *     back to sleep immediately after wake-up if the battery voltage is too low. We now rely  
+ *     on a hardware battery protection circuit, but the check is still there, in case.
  *   - Theres a sound channel on GPIO5, not currently used.
  *   - This version (weatherStation-ESP32C3) is designed to work especially with that chip. It 
  *     has a very low deep sleep current by design (43uA claimed), which is significantly less 
@@ -34,11 +34,13 @@
 #define VER     "1.00"
 #define BUILD   "22oct2023 @ 17:32h"
 
-// Checked this far...
+// Set trace to be false if you don't want diagnostic output. You can't have
+// both Serial o/p and OLED connectivity at the same time. Choose EITHER:
+#define serialTrace true  // requires Xiao_ESP32C3 board def
+#define oledTrace   false // requires ESP32C3 Dev Module board def
 
 /* Necessary includes */
 #include "flashscreen.h"
-// #include "rtcMemory.h"
 // #include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
 /* These includes are for the BME280 sensor */
 // #include <Wire.h>
@@ -50,31 +52,34 @@
 // #include <ESP8266HTTPClient.h>
 
 /* Global "defines" - some may have to look like variables because of type */
-#define ADC_0                 0     // Monitors battery health
-#define ADC_1                 1     // Plan is for this to monitor light levels
-#define SOUND_OUT             3     // Not currently used
-#define LED                   5
-#define CUTOFF      0 //300    // 369 // 6V0 = 738, so target 4V -> 492. For 18650, we want 3V -> 369
-#define I2C_ADDRESS           0x76   // Defines the expected I2C address (0x76) for the BMx280...
-#define ALT_I2C_ADDRESS       0x77   // - but is 0x77 on combined AHT20/BMP280
-#define ERROR_LOWBAT          1
-#define ERROR_NO_BMx          2
-#define ERROR_NO_WIFI         4
-#define ERROR_NO_BMx_READING  8
+// The following are pin definitions
+#define ADC_0                 0   // Monitors battery health
+#define ADC_1                 1   // Plan is for this to monitor light levels
+#define SOUND_OUT             3   // Not currently used
+#define LED                   5   // For the LED
+#define CONFIG_PIN1          21   // =msb; 0 = car, 1 = weather
+#define CONFIG_PIN2          20   //       0 = in,  1 = out
+#define CONFIG_PIN3          10   // =lsb; 0 = 1,   1 = 2
+// Cutoff was used before hardware battery protection was intoduced, now is legacy code
+#define CUTOFF                0   // 6V0 = 738. For 18650, we want 3V -> 369
+// The following are I2C address definitions
+#define SENSOR_ADDRESS      0x76  // Defines the expected I2C address (0x76) for the BMx280...
+#define ALT_I2C_ADDRESS     0x77  // - but is 0x77 on combined AHT20/BMP280
+// The following are error code definitions
+#define ERROR_LOWBAT           1
+#define ERROR_NO_BMx           2
+#define ERROR_NO_WIFI          4
+#define ERROR_NO_BMx_READING   8
 #define ERROR_NO_WEB_UPLOAD   16
 
 /* ----- Initialisation ------------------------------------------------- */
 
 /* Global stuff that must happen outside setup() */
-//rtcMemory         store;                // Creates an RTC memory object
-//BMx280I2C         bmx280(I2C_ADDRESS);  // Creates a BMx280I2C object using I2C
+RTC_DATA_ATTR int readingNo = 0;            // RTC data survives deep sleep; readingNo numbers the readings
+RTC_DATA_ATTR int error     = 0;            // error is the error# this run, available at startup after deep sleep
+//BMx280I2C         bmx280(SENSOR_ADDRESS);  // Creates a BMx280I2C object using I2C
 //AHT20             aht20;                // Creates AHT20 sensor object
 //ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
-int error         =  0;                 // Reports any errors that occur during run
-int pin           =  5;                 // Allows us to use alternative pins to LED_BUILTIN
-int config_pin1   = 21;                 // =msb; 0 = car, 1 = weather
-int config_pin2   = 20;                 //       0 = in,  1 = out
-int config_pin3   = 10;                 // =lsb; 0 = 1,   1 = 2
 int pin1;
 int pin2;
 int pin3;
@@ -87,10 +92,9 @@ void setup() {
   
   // declare variables
   long int  baudrate  = 115200;     // Baudrate for serial output
-  int       serialNo;               // Maintains a count of runs through deep sleep
-  int       prevError = 0;          // error code for the previous run
+  int       prevError;              // error code for the previous run
   boolean   batteryOK = false;      // Checks whether our battery has sufficient charge
-  uint64_t  deepSleepTime = 3600e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m
+  uint64_t  deepSleepTime = 60e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m, 60e6=1m
   bool      BMElive = false;        // records whether BME280 initialised properly
   int       adc  = 0;               // records battery voltage
   int       light = 0;              // records light level
@@ -100,46 +104,55 @@ void setup() {
   String    readings = "";          // For the parameter string in the http upload
   boolean   successful = false;     // If we fail, let's record the value and try next time
   String    urlRequest;             // String for contacting server
-  pinMode(LED, OUTPUT);             // Only use pin (LED) in case of error; but initialise it now
-  digitalWrite(LED, LOW);           // Turn off pin; it seems to come on by default
-  pinMode(SOUND_OUT, OUTPUT);
-  pinMode(config_pin1, INPUT_PULLUP); // {set up the configure pins to be input_pullup,
-  pinMode(config_pin2, INPUT_PULLUP); // {this will make them inverse logic
-  pinMode(config_pin3, INPUT_PULLUP);
+  pinMode(LED, OUTPUT);             // Only use LED in case of error; but initialise it now
+  digitalWrite(LED, LOW);           // Turn off LED; it seems to come on by default
+  pinMode(SOUND_OUT, OUTPUT);       // For sound o/p if required
+  pinMode(CONFIG_PIN1, INPUT_PULLUP); // {set up the configure pins to be input_pullup,
+  pinMode(CONFIG_PIN2, INPUT_PULLUP); // {this will make them inverse logic
+  pinMode(CONFIG_PIN3, INPUT_PULLUP);
 
   // Start up the serial output port
-  Serial.begin(baudrate);
+  if(serialTrace) Serial.begin(baudrate);
   // Serial.setDebugOutput(true);
 
   // Send program details to serial output
-  flash.message(PROG, VER, BUILD);
+  if(serialTrace) flash.message(PROG, VER, BUILD);
   
-  // Initialise the RTC memory
-  //store.readData();
-  // Remember the serial no for this set of readings
-  //serialNo = store.count() + 1;
-  //store.incrementCount();
-  Serial.print("Starting run ");
-  //Serial.println(serialNo);
+  // Set up the ESP deep sleep time
+  esp_sleep_enable_timer_wakeup(deepSleepTime);
+  if(serialTrace) Serial.printf("Deep sleep time set to %i minutes\n", deepSleepTime/60e6);
+
+  // Set up the reading no for this set of readings
+  readingNo++;
+  if(serialTrace)
+  {
+    Serial.print("Starting run ");
+    Serial.println(readingNo);
+  }
+
+  // Remember the error no for the previous run and reset for this run
+  prevError = error;
+  error = 0;
 
   // Check the ADC to see what the battery voltage is
-  Serial.println("Checking battery...");
+  if(serialTrace) Serial.println("Checking battery...");
   batteryOK = false;
   adc = analogRead(ADC_0);
-  Serial.print("ADC reading: ");
-  Serial.println(adc);
+  if(serialTrace)
+  {
+    Serial.print("ADC reading: ");
+    Serial.println(adc);  
+  }
   if(adc<CUTOFF) error += ERROR_LOWBAT;
   else batteryOK = true;
   if(batteryOK){
-    Serial.println("Battery OK");
-
+    if(serialTrace) Serial.println("Battery OK");
     // Determine which channel we're using
-    //channel = readChannel();
-    //Serial.printf("Channel read as: %s\n", channel);
+    channel = readChannel();
+    if(serialTrace) Serial.printf("Channel read as: %s\n", channel);
 
-    // Get the BME sensor going
-    // Initialise the BME sensor
-    Serial.println("Initialising sensor...");
+    // Get the sensor(s) going
+    if(serialTrace) Serial.println("Initialising sensor...");
     
     /* Now initialise the BME280 */
     //Wire.begin();
@@ -297,10 +310,14 @@ void setup() {
   // write the data back to rtc memory
   store.writeData();
   // Turn off the sound
-  analogWrite(SOUND_OUT, 0);
-  Serial.println("Going to sleep...");
+  analogWrite(SOUND_OUT, 0);*/
+  if(serialTrace)
+  {
+    Serial.println("Going to sleep...");
+    Serial.flush();
+  } 
   // Whether successful or not, we're going to sleep for an hour before trying again!
-  ESP.deepSleep(deepSleepTime);  */
+  esp_deep_sleep_start();
 }
 
 void blink(int code){
@@ -362,12 +379,12 @@ String readChannel(void)
 {
   String value = "";
   // Remember the config pins are reverse logic
-  pin1 = 1 - digitalRead(config_pin1);
-  pin2 = 1 - digitalRead(config_pin2);
-  pin3 = 1 - digitalRead(config_pin3);
-  Serial.printf("pin1: %i, pin2: %i. pin3: %i\n", pin1, pin2, pin3);
+  pin1 = 1 - digitalRead(CONFIG_PIN1);
+  pin2 = 1 - digitalRead(CONFIG_PIN2);
+  pin3 = 1 - digitalRead(CONFIG_PIN3);
+  if(serialTrace) Serial.printf("pin1: %i, pin2: %i. pin3: %i\n", pin1, pin2, pin3);
   int configVal = (4*pin1) + (2*pin2) + (pin3);
-  Serial.printf("configVal: %i\n", configVal);
+  if(serialTrace) Serial.printf("configVal: %i\n", configVal);
   value = configValues[configVal];
   return (value);
 }
