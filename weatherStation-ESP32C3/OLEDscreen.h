@@ -64,6 +64,7 @@ class OLEDscreen
 
   void clear()
   {
+    delay(3000);  // So I can read the display - rem this out when debugged!
     display.clearDisplay();
     display.setCursor(0, 0);     // Start at top-left corner
     display.display();

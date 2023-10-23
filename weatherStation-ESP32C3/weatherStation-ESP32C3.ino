@@ -32,7 +32,7 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "22oct2023 @ 17:32h"
+#define BUILD   "23oct2023 @ 22:43h"
 
 // Set trace to be false if you don't want diagnostic output. You can't have
 // both Serial o/p and OLED connectivity at the same time. Choose EITHER:
@@ -42,13 +42,13 @@
 /* Necessary includes */
 #include "flashscreen.h"
 #include "OLEDscreen.h"
-// #include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
-/* These includes are for the BME280 sensor */
-// #include <Wire.h>
-// #include <BMx280I2C.h>
-// #include <AHT20.h>
+#include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
+/* These includes are for the BME280 and AHT20 sensors */
+#include <Wire.h>
+#include <BMx280I2C.h>
+#include <AHT20.h>
 /* These are for the WiFi & webclient */
-// #include <ESP8266WiFi.h>
+#include <WiFi.h>
 // #include <ESP8266WiFiMulti.h>
 // #include <ESP8266HTTPClient.h>
 
@@ -76,11 +76,12 @@
 /* ----- Initialisation ------------------------------------------------- */
 
 /* Global stuff that must happen outside setup() */
-RTC_DATA_ATTR int readingNo = 0;            // RTC data survives deep sleep; readingNo numbers the readings
-RTC_DATA_ATTR int error     = 0;            // error is the error# this run, available at startup after deep sleep
-OLEDscreen        screen;                   // Creates the screen (OLED) object
-//BMx280I2C         bmx280(SENSOR_ADDRESS);  // Creates a BMx280I2C object using I2C
-//AHT20             aht20;                // Creates AHT20 sensor object
+RTC_DATA_ATTR int readingNo = 0;          // RTC data survives deep sleep; readingNo numbers the readings
+RTC_DATA_ATTR int error     = 0;          // error is the error# this run, available at startup after deep sleep
+OLEDscreen        screen;                 // Creates the screen (OLED) object
+BMx280I2C         bmx280(SENSOR_ADDRESS); // Creates a BMx280I2C object using I2C
+AHT20             aht20;                  // Creates AHT20 sensor object
+IPAddress         ipAddr = -1;            // For IP address if we connect OK
 //ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
 int pin1;
 int pin2;
@@ -133,7 +134,6 @@ void setup() {
   message = "Starting run " + String(readingNo) + "\n";
   if(serialTrace) Serial.print(message);
   if(oledTrace){
-    delay(2000);
     screen.clear();
     screen.print(message);
   }
@@ -160,26 +160,33 @@ void setup() {
     if(serialTrace) Serial.print(message);
     if(oledTrace) screen.print(message);
 
+    // Read the Light sensor
+    light = analogRead(ADC_1);
+    message = "Light level: " + String(light) + "\n";
+    if(serialTrace) Serial.print(message);
+    if(oledTrace) screen.print(message);
+
     // Get the sensor(s) going
-    if(serialTrace) Serial.println("Initialising sensor...");
-    if(oledTrace) screen.print("Initialising sensor\n");
+    if(serialTrace) Serial.println("Initialising sensors...");
+    if(oledTrace) screen.print("Initialising sensors\n");
 
     /* Now initialise the BME280 */
-    //Wire.begin();
+    Wire.begin();
     /* begin() checks the Interface, reads the sensor ID (to differentiate between 
-     BMP280 and BME280) and reads compensation parameters.*/\
-    /*int attempts = 5;
+     BMP280 and BME280) and reads compensation parameters.*/
+    int attempts = 5;
     while(!bmx280.begin() && (attempts>0))
     {
-      Serial.print("Attempt ");
-      Serial.print(6-attempts--);
-      Serial.println(": begin() failed. Trying again."); //check your BMx280 Interface and I2C Address.");
+      message = String(6-attempts--) + ".";
+      if(serialTrace) Serial.print(message);
+      if(oledTrace) screen.print(message);
       delay(1000);
     }
     if(attempts<1) 
     {
       // Sensor initialisation failed
-      Serial.println("begin() failed. Check your BMx280 Interface and I2C Address.");
+      if(serialTrace) Serial.println("BMx280 not found.");
+      if(oledTrace) screen.print("BMx280 not found\n");
       temp = -1;
       pres = -1;
       hum  = -1;
@@ -189,8 +196,10 @@ void setup() {
     {
       // Sensor initialised; set up sensor parameters
       BMElive = true;
-      if (bmx280.isBME280()) Serial.println("sensor is a BME280");
-      else Serial.println("sensor is a BMP280");
+      String sensorType = "BMP280 detected\n";
+      if (bmx280.isBME280()) sensorType = "BME280 detected\n";
+      if(serialTrace) Serial.print(sensorType);
+      if(oledTrace) screen.print(sensorType);
       //reset sensor to default parameters.
       bmx280.resetToDefaults();
       //by default sensing is disabled and must be enabled by setting a non-zero
@@ -200,14 +209,14 @@ void setup() {
       bmx280.writeOversamplingTemperature(BMx280MI::OSRS_T_x16);
       //if sensor is a BME280, set an oversampling setting for humidity measurements.
       if (bmx280.isBME280()) bmx280.writeOversamplingHumidity(BMx280MI::OSRS_H_x16);
-    }*/
+    }
 
     // If we're up and running get the sensor readings (ADC has already been recorded)
-    /*if(BMElive)
+    if(BMElive)
     {
       //start a measurement
       if (!bmx280.measure()){
-        Serial.println("could not start measurement, is a measurement already running?");
+        if(serialTrace) Serial.println("could not start measurement, is a measurement already running?");
         error += ERROR_NO_BMx_READING; // Error #8 means although the sensor initialised, we couldn't get a reading
       }
       else
@@ -221,44 +230,46 @@ void setup() {
           if(bmx280.isBME280()) hum = bmx280.getHumidity();
         }
       }
-    }*/
+    }
 
     /* See if we have an AHT20 */
     // We've already got Wire going => Wire.begin(); //Join I2C bus
     //Check if the AHT20 will acknowledge
-    /*if (aht20.begin() == false) Serial.println("AHT20 not detected.");
-    else
+    message = "AHT20 not detected\n";
+    if (aht20.begin())
     {
-      Serial.println("AHT20 detected.");
+      message = "AHT20 detected\n";
       temp = aht20.getTemperature();
       hum = aht20.getHumidity();
-    }*/
+    }
+    if(serialTrace) Serial.print(message);
+    if(oledTrace)
+    {
+      screen.clear();
+      screen.print(message);
+    } 
 
-    // Start the sound
+    // Start the sound - if required
     //analogWrite(SOUND_OUT, TONE);
 
     // Set up the parameter string for the web exchange
-    /*int prevError = store.error();
-    Serial.print("Previous error # was: ");
-    Serial.println(prevError);
-    readings = "?"+String(channel)+"="+String(adc)+"&serialNo="+String(serialNo)+"&temp="+String(temp)+"&pres="+String(pres)+"&hum="+String(hum)+"&error="+String(store.error());
-    Serial.print("Param String is: ");
-    Serial.println(readings);
-    Serial.print("Current error is: ");
-    Serial.println(error);*/
+    readings = "?"+String(channel)+"="+String(adc)+"&light="+String(light)+"&serialNo="+String(readingNo)+"&temp="+String(temp)+"&pres="+String(pres)+"&hum="+String(hum)+"&error="+String(prevError);
+    message = "readings: " + readings + "\n";
+    if(serialTrace) Serial.println(message);
+    if(oledTrace) screen.print(message);
 
     // Register WiFi extender
-    /*WiFiMulti.addAP(SSID_2, PWD_2);
+    // WiFiMulti.addAP(SSID_2, PWD_2);
+
     // Now start up the wifi and attempt to submit the data
-    wifiConnect();
-    //Serial.print("Connecting to WiFi");
-    // Check for WiFi connection 
-    successful = false;
-    if(WiFiMulti.run() == WL_CONNECTED)
+    if(wifiConnect())
     {
-      Serial.print("WiFi connected: ");
-      Serial.println(WiFi.SSID());
-      WiFiClient client;
+      if(serialTrace)
+      {
+        Serial.print("SSID: ");
+        Serial.println(WiFi.SSID());
+      }
+      /*WiFiClient client;
       HTTPClient http; // Must be declared after WiFiClient for correct destruction order, because used by http.begin(client,...)
       //trace("\n[HTTP]", "");
 
@@ -301,8 +312,8 @@ void setup() {
         error += ERROR_NO_WEB_UPLOAD;  // error #16 means the upload to the server failed
         Serial.printf("Request failed, error: %s\n", http.errorToString(httpCode).c_str());
       }
-      http.end();
-    }*/
+      http.end();*/
+    }
     // If no WiFi...
     //else trace("WiFi failed, code: ", String(WiFiMulti.run()));
   }
@@ -338,43 +349,35 @@ void blink(int code){
     delay(500);
   }
 }
-/*
-void wifiConnect()
-{
-  Serial.println("Connecting to Wifi...");
-  WiFi.mode(WIFI_STA);
-  WiFiMulti.addAP(LOCAL_SSID, LOCAL_PWD);*/
-  /* NOTE: the example sketch has this wrong. We need to wait -after- doing
-           the WiFiMulti.addAP to give it time to register! */
-/*  Serial.print("[SETUP]\nWAIT ");
-  for (uint8_t t = 4; t > 0; t--) {
-    Serial.printf("%d...", t);
-    Serial.flush();
-    delay(1500);
-  }
-  Serial.println();
 
-  int attempts = 5;
-  
-  while(WiFiMulti.run() != WL_CONNECTED && (attempts-- >0))
+bool wifiConnect()
+{
+  String message;
+  bool   connected = false;
+  if(serialTrace) Serial.println("Connecting to Wifi...");
+  //WiFi.mode(WIFI_STA);
+  WiFi.begin(LOCAL_SSID, LOCAL_PWD);
+  int tries = 5;
+  while((WiFi.status() != WL_CONNECTED) && (tries>0))
   {
-    Serial.println("WiFi not connected");
-    delay(1000);
+    delay(500);
+    tries--;
   }
-  
-  if (WiFiMulti.run() == WL_CONNECTED) 
+  if(WiFi.status()==WL_CONNECTED)
   {
-    Serial.println("WiFi connected");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    ipAddr = WiFi.localIP();
+    message = "WiFi connected\n";
+    connected = true;
   }
   else{
     error += ERROR_NO_WIFI; // error #4 means we couldn't connect to WiFi
-    Serial.println("WiFi connection failed!");
+    message = "WiFi connection failed!\n";
   }
-  return;
+  if(serialTrace) Serial.print(message);
+  if(oledTrace) screen.print(message);
+  return(connected);
 }
-*/
+
 /*boolean checkBattery(){
   adc = analogRead(ADC_0);
   if(adc<=CUTOFF) store.setError(1);
