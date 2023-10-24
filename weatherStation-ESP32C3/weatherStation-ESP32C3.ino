@@ -32,7 +32,7 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "23oct2023 @ 22:43h"
+#define BUILD   "24oct2023 @ 23:41h"
 
 // Set trace to be false if you don't want diagnostic output. You can't have
 // both Serial o/p and OLED connectivity at the same time. Choose EITHER:
@@ -49,8 +49,8 @@
 #include <AHT20.h>
 /* These are for the WiFi & webclient */
 #include <WiFi.h>
-// #include <ESP8266WiFiMulti.h>
-// #include <ESP8266HTTPClient.h>
+#include <WiFiMulti.h>
+#include <HTTPClient.h>
 
 /* Global "defines" - some may have to look like variables because of type */
 // The following are pin definitions
@@ -61,8 +61,8 @@
 #define CONFIG_PIN1          21   // =msb; 0 = car, 1 = weather
 #define CONFIG_PIN2          20   //       0 = in,  1 = out
 #define CONFIG_PIN3          10   // =lsb; 0 = 1,   1 = 2
-// Cutoff was used before hardware battery protection was intoduced, now is legacy code
-#define CUTOFF                0   // 6V0 = 738. For 18650, we want 3V -> 369
+// Cutoff was mostly used before hardware battery protection was intoduced
+#define CUTOFF                0   // 6V0 = 738. For 18650, 3V -> 369. But board specific
 // The following are I2C address definitions
 #define SENSOR_ADDRESS      0x76  // Defines the expected I2C address (0x76) for the BMx280...
 #define ALT_I2C_ADDRESS     0x77  // - but is 0x77 on combined AHT20/BMP280
@@ -82,7 +82,7 @@ OLEDscreen        screen;                 // Creates the screen (OLED) object
 BMx280I2C         bmx280(SENSOR_ADDRESS); // Creates a BMx280I2C object using I2C
 AHT20             aht20;                  // Creates AHT20 sensor object
 IPAddress         ipAddr = -1;            // For IP address if we connect OK
-//ESP8266WiFiMulti  WiFiMulti;            // Creates a WiFiMulti object
+WiFiMulti         wifiMulti;              // Creates a WiFiMulti object
 int pin1;
 int pin2;
 int pin3;
@@ -258,40 +258,40 @@ void setup() {
     if(serialTrace) Serial.println(message);
     if(oledTrace) screen.print(message);
 
-    // Register WiFi extender
-    // WiFiMulti.addAP(SSID_2, PWD_2);
+    // Light up the LED
+    digitalWrite(LED,HIGH);
+
+    // Connect to WiFi (or extender?)
+    //wifiMulti.addAP(LOCAL_SSID, LOCAL_PWD);
+    //wifiMulti.addAP(SSID_2, PWD_2);
 
     // Now start up the wifi and attempt to submit the data
     if(wifiConnect())
     {
-      if(serialTrace)
-      {
-        Serial.print("SSID: ");
-        Serial.println(WiFi.SSID());
-      }
-      /*WiFiClient client;
-      HTTPClient http; // Must be declared after WiFiClient for correct destruction order, because used by http.begin(client,...)
-      //trace("\n[HTTP]", "");
+      message = "SSID: " + WiFi.SSID() + "\n";
+      if(serialTrace) Serial.print(message);
+      if(oledTrace) screen.print(message);
+
+      HTTPClient client;
 
       urlRequest = URL_W; //"http://argles.org.uk/homelog.php";
       urlRequest += readings;
-      // trace("empty = ", String(adcStore.empty));   
       // Now make the request
       String message = "Requesting: " + urlRequest;
-      Serial.println(message);
-      http.begin(client, urlRequest);
+      if(serialTrace)Serial.println(message);
+      client.begin(urlRequest);
       // start connection and send HTTP header
-      int httpCode = http.GET();
+      int httpCode = client.GET();
       
       // If the www URL failed, try the direct IP address
       if(httpCode != HTTP_CODE_OK)
       {
-        Serial.println("URL request failed, trying IP address.");
+        if(serialTrace)Serial.println("URL request failed, trying IP address.");
         // Set up request url with reading parameter(s)
         urlRequest = URL_D + readings; //"http://192.168.1.76";
-        http.begin(client, urlRequest);
-        httpCode = http.GET();
-        http.end();        
+        client.begin(urlRequest);
+        httpCode = client.GET();
+        client.end();        
       }
       
       if (httpCode > 0) 
@@ -302,7 +302,8 @@ void setup() {
         if (httpCode == HTTP_CODE_OK) 
         {
           // Serial.println(http.getString());  // Gets the actual page returned
-          Serial.println("Request successful");
+          if(serialTrace)Serial.println("Request successful");
+          if(oledTrace)screen.print("Web transfer OK");
           //trace("Connection closed", "");
           successful = true;
         }
@@ -310,34 +311,33 @@ void setup() {
       // HTTP request failed 
       else{
         error += ERROR_NO_WEB_UPLOAD;  // error #16 means the upload to the server failed
-        Serial.printf("Request failed, error: %s\n", http.errorToString(httpCode).c_str());
+        if(serialTrace)Serial.printf("Request failed, error: %s\n", client.errorToString(httpCode).c_str());
+        if(oledTrace)screen.print(client.errorToString(httpCode).c_str());
       }
-      http.end();*/
+      client.end();
     }
     // If no WiFi...
     //else trace("WiFi failed, code: ", String(WiFiMulti.run()));
   }
 
-  /*if(error!=0){
-    Serial.print("Error #");
-    Serial.print(error);
-    Serial.println(" occured");
+  if(error!=0){
+    message = "Error #" + String(error) + " occured\n";
+    if(serialTrace) Serial.print(message);
+    if(oledTrace) screen.print(message);
     blink(error);
   }
   // Save the error code
-  store.setError(error);
-  Serial.print("Error set to: ");
-  Serial.println(store.error());
-  // write the data back to rtc memory
-  store.writeData();
+  prevError = error;
+
   // Turn off the sound
-  analogWrite(SOUND_OUT, 0);*/
+  //analogWrite(SOUND_OUT, 0);
+
   if(serialTrace)
   {
     Serial.println("Going to sleep...");
     //Serial.flush();
   }
- if(oledTrace) screen.print("zzz...");
+ if(oledTrace) screen.print("..zzz.");
 
   // Whether successful or not, we're going to sleep for an hour before trying again!
   esp_deep_sleep_start();
@@ -356,14 +356,14 @@ bool wifiConnect()
   bool   connected = false;
   if(serialTrace) Serial.println("Connecting to Wifi...");
   //WiFi.mode(WIFI_STA);
-  WiFi.begin(LOCAL_SSID, LOCAL_PWD);
+  wifiMulti.addAP(LOCAL_SSID, LOCAL_PWD);
   int tries = 5;
-  while((WiFi.status() != WL_CONNECTED) && (tries>0))
+  while((wifiMulti.run() != WL_CONNECTED) && (tries>0))
   {
     delay(500);
     tries--;
   }
-  if(WiFi.status()==WL_CONNECTED)
+  if(wifiMulti.run()==WL_CONNECTED)
   {
     ipAddr = WiFi.localIP();
     message = "WiFi connected\n";
@@ -377,6 +377,31 @@ bool wifiConnect()
   if(oledTrace) screen.print(message);
   return(connected);
 }
+
+/*bool webConnect(WiFiClient client)
+{
+  String message;
+  bool   connected = false;
+  if(serialTrace) Serial.println("Connecting to web...");
+  int tries = 10;
+  while(!client.connect(host, port) && (tries>0))
+  {
+    delay(500);
+    tries--;
+  }
+  if(tries>0)
+  {
+    message = "web connected\n";
+    connected = true;
+  }
+  else{
+    error += ERROR_NO_WIFI; // error #4 means we couldn't connect to WiFi
+    message = "Web connection failed!\n";
+  }
+  if(serialTrace) Serial.print(message);
+  if(oledTrace) screen.print(message);
+  return(connected);
+}*/
 
 /*boolean checkBattery(){
   adc = analogRead(ADC_0);
