@@ -32,12 +32,12 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "24oct2023 @ 23:41h"
+#define BUILD   "26oct2023 @ 21:00h"
 
 // Set trace to be false if you don't want diagnostic output. You can't have
 // both Serial o/p and OLED connectivity at the same time. Choose EITHER:
 #define serialTrace false  // requires Xiao_ESP32C3 board def
-#define oledTrace   true   // requires ESP32C3 Dev Module board def
+#define oledTrace   false  // requires ESP32C3 Dev Module board def
 
 /* Necessary includes */
 #include "flashscreen.h"
@@ -56,11 +56,14 @@
 // The following are pin definitions
 #define ADC_0                 0   // Monitors battery health
 #define ADC_1                 1   // Plan is for this to monitor light levels
-#define SOUND_OUT             3   // Not currently used
-#define LED                   5   // For the LED
-#define CONFIG_PIN1          21   // =msb; 0 = car, 1 = weather
-#define CONFIG_PIN2          20   //       0 = in,  1 = out
-#define CONFIG_PIN3          10   // =lsb; 0 = 1,   1 = 2
+#define CONFIG_PIN1           5   // =msb; 0 = car, 1 = weather
+#define CONFIG_PIN2           6   //       0 = in,  1 = out
+#define CONFIG_PIN3           7   // =lsb; 0 = 1,   1 = 2
+#define SDA_PIN               8   // Configured elsewhere, but here for reference
+#define SCL_PIN               9   // -ditto-
+#define I2C_PWR              10   // Used to control power to I2C devices
+#define SOUND_OUT            20   // Not currently used
+#define LED                  21   // For the LED
 // Cutoff was mostly used before hardware battery protection was intoduced
 #define CUTOFF                0   // 6V0 = 738. For 18650, 3V -> 369. But board specific
 // The following are I2C address definitions
@@ -92,7 +95,7 @@ String configValues[]   = {"test", "mx5", "test", "test", "in1", "in2", "bat", "
 void setup() {
   // initialise objects
   flashscreen flash;
-  screen.begin();
+  if(oledTrace) screen.begin();
   
   // declare variables
   long int  baudrate  = 115200;     // Baudrate for serial output
@@ -114,6 +117,8 @@ void setup() {
   pinMode(CONFIG_PIN1, INPUT_PULLUP); // {set up the configure pins to be input_pullup,
   pinMode(CONFIG_PIN2, INPUT_PULLUP); // {this will make them inverse logic
   pinMode(CONFIG_PIN3, INPUT_PULLUP);
+  //pinMode(I2C_PWR, OUTPUT);         // Some I2C boards don't sleep properly, so...
+  //digitalWrite(I2C_PWR, LOW);      // ...use this to switch them off in deep sleep
 
   // Start up the serial output port
   if(serialTrace) Serial.begin(baudrate);
@@ -337,7 +342,7 @@ void setup() {
     Serial.println("Going to sleep...");
     //Serial.flush();
   }
- if(oledTrace) screen.print("..zzz.");
+  if(oledTrace) screen.print("..zzz.");
 
   // Whether successful or not, we're going to sleep for an hour before trying again!
   esp_deep_sleep_start();
