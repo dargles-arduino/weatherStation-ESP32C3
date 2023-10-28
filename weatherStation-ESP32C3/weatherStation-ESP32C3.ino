@@ -32,12 +32,12 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "26oct2023 @ 21:00h"
+#define BUILD   "28oct2023 @ 20:00h"
 
 // Set trace to be false if you don't want diagnostic output. You can't have
 // both Serial o/p and OLED connectivity at the same time. Choose EITHER:
 #define serialTrace false  // requires Xiao_ESP32C3 board def
-#define oledTrace   false  // requires ESP32C3 Dev Module board def
+#define oledTrace   true  // requires ESP32C3 Dev Module board def
 
 /* Necessary includes */
 #include "flashscreen.h"
@@ -66,9 +66,10 @@
 #define LED                  21   // For the LED
 // Cutoff was mostly used before hardware battery protection was intoduced
 #define CUTOFF                0   // 6V0 = 738. For 18650, 3V -> 369. But board specific
-// The following are I2C address definitions
-#define SENSOR_ADDRESS      0x76  // Defines the expected I2C address (0x76) for the BMx280...
-#define ALT_I2C_ADDRESS     0x77  // - but is 0x77 on combined AHT20/BMP280
+/* SENSOR_ADDRESS defines the I2C address for the BMx280 sensor.
+ * The default address is 0x76, but the AHT20/BMP280 combined sensor has the 
+ * BMP280 at 0x77 */
+#define SENSOR_ADDRESS      0x77
 // The following are error code definitions
 #define ERROR_LOWBAT           1
 #define ERROR_NO_BMx           2
@@ -101,7 +102,7 @@ void setup() {
   long int  baudrate  = 115200;     // Baudrate for serial output
   int       prevError;              // error code for the previous run
   boolean   batteryOK = false;      // Checks whether our battery has sufficient charge
-  uint64_t  deepSleepTime = 60e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m, 60e6=1m
+  uint64_t  deepSleepTime = 3600e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m, 60e6=1m
   bool      BMElive = false;        // records whether BME280 initialised properly
   int       adc  = 0;               // records battery voltage
   int       light = 0;              // records light level
