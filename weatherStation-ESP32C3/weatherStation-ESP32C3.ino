@@ -19,8 +19,10 @@
  *   - We use info.h to define SSID and PASSWORD, while not showing it on GitHUb ;) 
  *     So, if you're downloading this from GitHub, you need to add an info.h with: 
  *       #define LOCAL_SSID <your ssid>
- *       #define LOCAL_PWD <your password>
- *     Or if you prefer, you could just include these two lines in the code below and remove 
+ *       #define LOCAL_PWD  <your password>
+ *       #define URL_W      <your website url>
+ *       #define URL_D      <your website IP address-based url
+ *     Or if you prefer, you could just include these four lines in the code below and remove 
  *     the #include "info.h"...
  *   - I allow for multiple weather stations on different "channels". The channel is set in 
  *     hardware, so the software now has to read hardware links to determine which channel to   
@@ -32,18 +34,19 @@
 /* Program identification */ 
 #define PROG    "weatherStation-ESP32C3"
 #define VER     "1.00"
-#define BUILD   "28oct2023 @ 20:00h"
+#define BUILD   "11nov2023 @ 12:31h"
 
-// Set trace to be false if you don't want diagnostic output. You can't have
-// both Serial o/p and OLED connectivity at the same time. Choose EITHER:
-#define serialTrace false  // requires Xiao_ESP32C3 board def
-#define oledTrace   true  // requires ESP32C3 Dev Module board def
+/* Set trace to be false if you don't want diagnostic output. You can't have
+   both Serial o/p and OLED connectivity at the same time. Choose EITHER: */
+bool serialTrace = false;  // requires Xiao_ESP32C3 board def
+bool oledTrace   = true;   // requires ESP32C3 Dev Module board def
+/* Note: oledTrace will get reset to false if no OLED screen is found */
 
 /* Necessary includes */
 #include "flashscreen.h"
 #include "OLEDscreen.h"
 #include "info.h"       // Allows definition of SSID and password without it showing on GitHub ;)
-/* These includes are for the BME280 and AHT20 sensors */
+/* These includes are for I2C devices and the BMP280 and AHT20 sensors */
 #include <Wire.h>
 #include <BMx280I2C.h>
 #include <AHT20.h>
@@ -54,10 +57,11 @@
 
 /* Global "defines" - some may have to look like variables because of type */
 // The following are pin definitions
-#define ADC_0                 0   // Monitors battery health
-#define ADC_1                 1   // Plan is for this to monitor light levels
+#define ADC_0                 0   // Expectation: monitors battery health...
+#define ADC_1                 1   // ...monitors light levels
+#define ADC_2                 2   // ...monitors solar panel/wind turbine
 #define CONFIG_PIN1           5   // =msb; 0 = car, 1 = weather
-#define CONFIG_PIN2           6   //       0 = in,  1 = out
+#define CONFIG_PIN2           6   //       0 = inside,  1 = outside
 #define CONFIG_PIN3           7   // =lsb; 0 = 1,   1 = 2
 #define SDA_PIN               8   // Configured elsewhere, but here for reference
 #define SCL_PIN               9   // -ditto-
@@ -66,14 +70,15 @@
 #define LED                  21   // For the LED
 // Cutoff was mostly used before hardware battery protection was intoduced
 #define CUTOFF                0   // 6V0 = 738. For 18650, 3V -> 369. But board specific
-/* SENSOR_ADDRESS defines the I2C address for the BMx280 sensor.
- * The default address is 0x76, but the AHT20/BMP280 combined sensor has the 
- * BMP280 at 0x77 */
-#define SENSOR_ADDRESS      0x77
+// Define the I2C addresses
+#define OLED_ADDRESS        0x3C
+#define AHT20_ADDRESS       0x38
+#define SENSOR_ADDRESS1     0x76  // Default BMx280 address
+#define SENSOR_ADDRESS2     0x77  // Address used for BMP280 on BMP280/AHT20 combined board
 // The following are error code definitions
-#define ERROR_LOWBAT           1
-#define ERROR_NO_BMx           2
-#define ERROR_NO_WIFI          4
+#define ERROR_LOWBAT           1  // After a lowbat error, no other errors are possible
+#define ERROR_NO_BMx           2  // After a no-BMx error, a no-BMxReading error is not possible
+#define ERROR_NO_WIFI          4  // After a no-WiFi error, a no-webUpload error is not possible
 #define ERROR_NO_BMx_READING   8
 #define ERROR_NO_WEB_UPLOAD   16
 
@@ -82,8 +87,8 @@
 /* Global stuff that must happen outside setup() */
 RTC_DATA_ATTR int readingNo = 0;          // RTC data survives deep sleep; readingNo numbers the readings
 RTC_DATA_ATTR int error     = 0;          // error is the error# this run, available at startup after deep sleep
+
 OLEDscreen        screen;                 // Creates the screen (OLED) object
-BMx280I2C         bmx280(SENSOR_ADDRESS); // Creates a BMx280I2C object using I2C
 AHT20             aht20;                  // Creates AHT20 sensor object
 IPAddress         ipAddr = -1;            // For IP address if we connect OK
 WiFiMulti         wifiMulti;              // Creates a WiFiMulti object
@@ -94,6 +99,13 @@ String channel    = "";
 String configValues[]   = {"test", "mx5", "test", "test", "in1", "in2", "bat", "out2"};
 
 void setup() {
+  // Before we go further, we need to check what devices we've got connected
+  Wire.begin();  // Get the I2C channel going
+  if(!I2C_check(OLED_ADDRESS)) oledTrace = false;
+  int sensor = SENSOR_ADDRESS1;
+  if(!I2C_check(sensor)) sensor = SENSOR_ADDRESS2;
+  BMx280I2C         bmx280(sensor); // Creates a BMx280I2C object using I2C
+
   // initialise objects
   flashscreen flash;
   if(oledTrace) screen.begin();
@@ -104,8 +116,9 @@ void setup() {
   boolean   batteryOK = false;      // Checks whether our battery has sufficient charge
   uint64_t  deepSleepTime = 3600e6; // Deep sleep delay (millionths of sec): 3600e6=1h, 300e6=5m, 60e6=1m
   bool      BMElive = false;        // records whether BME280 initialised properly
-  int       adc  = 0;               // records battery voltage
-  int       light = 0;              // records light level
+  int       adc  = 0;               // records: battery voltage...
+  int       light = 0;              // ...light level, and...
+  int       power = 0;              // ...power generation level
   float     temp = 0;               // records: temperature...
   float     pres = 0;               // ...pressure...
   float     hum  = 0;               // ...and humidity
@@ -354,6 +367,15 @@ void blink(int code){
     digitalWrite(LED, !digitalRead(LED));
     delay(500);
   }
+}
+
+bool I2C_check(int I2Caddress)
+{
+  Wire.beginTransmission(I2Caddress);
+  byte err = Wire.endTransmission();
+  bool returnVal = false;
+  if(err==0) returnVal = true;
+  return returnVal;
 }
 
 bool wifiConnect()
