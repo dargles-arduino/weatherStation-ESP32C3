@@ -34,7 +34,9 @@ On AliExpress: https://www.aliexpress.com/item/1005005652004834.html?spm=a2g0o.p
 
 Be careful - this looks to be the right version, but make sure it doesn't have a silly voltage regulator on it.
 
-The final issue is the OLED screen. Why are we using an OLED screen? Because the ESP32C3 as suppied seems to use the I2C lines for serial i/o. That's then a problem in that it's not possible to get trace via Serial.print() etc and still keep the I2C sensor(s) running. So adding an I2C OLED screen solves this problem. But the screen draws 2-8mA all the time, depending on what's displaying on the screen, and it keeps drawing in deep sleep. So it's convenient 
+The final issue is the OLED screen. Why are we using an OLED screen? Because the ESP32C3 as supplied seems to use the I2C lines for serial i/o. That's then a problem in that it's not possible to get trace via Serial.print() etc in the Arduino IDE and still keep the I2C sensor(s) running. So adding an I2C OLED screen solves this problem. But the screen draws 2-8mA all the time, depending on what's displaying on the screen, and it keeps drawing in deep sleep. So it's convenient to provide for a "pluggable" OLED screen that can be plugged in for feedback, and unplugged again for practical use. The code decides whether there is a screen present and adapts accordingly.
+
+With all these factors taken into account, it should be possible to reduce deep sleep current to around 40uA.
 
 *The Code*
 
